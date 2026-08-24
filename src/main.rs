@@ -1,11 +1,11 @@
-use birdcage::process::{Command, Stdio};
-use birdcage::{Birdcage, Exception, Sandbox};
 use serde::Deserialize;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const DESCRIPTION: &str = r#"{"name":"bash","description":"Execute Bash in an isolated workspace without network or credential access. Returns stdout and stderr. Commands time out after 120 seconds by default.","parameters":{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run"},"timeout":{"type":"number","minimum":1,"maximum":600,"description":"Timeout in seconds (default 120, maximum 600)"}},"required":["command"],"additionalProperties":false},"snippet":"Execute isolated Bash commands"}"#;
+const DESCRIPTION: &str = r#"{"name":"bash","description":"Execute non-interactive Bash with host filesystem and network access. The environment excludes inherited credentials. Returns stdout and stderr. Commands time out after 120 seconds by default.","parameters":{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run"},"timeout":{"type":"number","minimum":1,"maximum":600,"description":"Timeout in seconds (default 120, maximum 600)"}},"required":["command"],"additionalProperties":false},"snippet":"Execute Bash commands"}"#;
 const MAX_INPUT: u64 = 1024 * 1024;
 const MAX_OUTPUT: usize = 16 * 1024;
 const DEFAULT_TIMEOUT: u64 = 120;
@@ -54,27 +54,21 @@ fn run() -> Result<(), (i32, String)> {
     }
     let timeout = arguments.timeout.unwrap_or(DEFAULT_TIMEOUT);
     let workspace = workspace()?;
-    std::env::set_current_dir(&workspace).map_err(runtime_error)?;
-    clear_environment(&workspace);
-
-    let mut sandbox = Birdcage::new();
-    allow_system(&mut sandbox)?;
-    sandbox
-        .add_exception(Exception::WriteAndRead(workspace))
-        .map_err(sandbox_error)?;
-    for name in ["HOME", "PATH", "TMPDIR", "LANG", "LC_ALL"] {
-        sandbox
-            .add_exception(Exception::Environment(name.to_string()))
-            .map_err(sandbox_error)?;
-    }
-
     let mut command = Command::new("/bin/bash");
     command
         .args(["--noprofile", "--norc", "-c", &arguments.command])
+        .current_dir(&workspace)
+        .env_clear()
+        .env("HOME", &workspace)
+        .env("TMPDIR", &workspace)
+        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
+        .env("LANG", "C.UTF-8")
+        .env("LC_ALL", "C.UTF-8")
+        .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    let mut child = sandbox.spawn(command).map_err(sandbox_error)?;
+    let mut child = command.spawn().map_err(runtime_error)?;
     let stdout = child
         .stdout
         .take()
@@ -92,7 +86,7 @@ fn run() -> Result<(), (i32, String)> {
             break Some(status);
         }
         if Instant::now() >= deadline {
-            child.kill().map_err(runtime_error)?;
+            kill_process_group(child.id());
             let _ = child.wait();
             timed_out = true;
             break None;
@@ -136,49 +130,10 @@ fn workspace() -> Result<PathBuf, (i32, String)> {
     std::fs::canonicalize(path).map_err(runtime_error)
 }
 
-fn clear_environment(workspace: &Path) {
-    let variables: Vec<_> = std::env::vars_os().map(|(name, _)| name).collect();
-    for name in variables {
-        unsafe { std::env::remove_var(name) };
-    }
+fn kill_process_group(pid: u32) {
     unsafe {
-        std::env::set_var("HOME", workspace);
-        std::env::set_var("TMPDIR", workspace);
-        std::env::set_var("PATH", "/usr/local/bin:/usr/bin:/bin");
-        std::env::set_var("LANG", "C.UTF-8");
-        std::env::set_var("LC_ALL", "C.UTF-8");
+        libc::kill(-(pid as i32), libc::SIGKILL);
     }
-}
-
-fn allow_system(sandbox: &mut Birdcage) -> Result<(), (i32, String)> {
-    for path in ["/bin", "/usr", "/lib", "/lib64"] {
-        if Path::new(path).exists() {
-            sandbox
-                .add_exception(Exception::ExecuteAndRead(path.into()))
-                .map_err(sandbox_error)?;
-        }
-    }
-    for path in [
-        "/etc/ld.so.cache",
-        "/etc/localtime",
-        "/etc/passwd",
-        "/etc/group",
-        "/etc/ssl/certs",
-    ] {
-        if Path::new(path).exists() {
-            sandbox
-                .add_exception(Exception::Read(path.into()))
-                .map_err(sandbox_error)?;
-        }
-    }
-    for path in ["/dev/null", "/dev/urandom"] {
-        if Path::new(path).exists() {
-            sandbox
-                .add_exception(Exception::WriteAndRead(path.into()))
-                .map_err(sandbox_error)?;
-        }
-    }
-    Ok(())
 }
 
 fn read_limited(mut reader: impl Read) -> Result<String, (i32, String)> {
@@ -221,10 +176,6 @@ fn runtime(message: &str) -> (i32, String) {
 
 fn runtime_error(error: impl std::fmt::Display) -> (i32, String) {
     (1, error.to_string())
-}
-
-fn sandbox_error(error: impl std::fmt::Display) -> (i32, String) {
-    (1, format!("sandbox failed: {error}"))
 }
 
 #[cfg(test)]

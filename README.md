@@ -1,23 +1,25 @@
 # Bashx
 
-Bashx runs non-interactive Bash commands in a Birdcage sandbox and implements the Unix tool convention.
+Bashx runs non-interactive Bash commands and implements the Unix tool convention.
 
 ```sh
 bashx describe
 printf '%s\n' '{"command":"printf hello"}' | bashx run bash
 ```
 
-The sandbox exposes the selected workspace as writable, system programs and libraries as read-only, a minimal environment, and no network. Host home files and credentials outside the workspace are hidden. Commands time out after 120 seconds by default and cannot request more than 600 seconds. Bashx fails if the sandbox cannot start.
+Commands run with host filesystem and network access. Bashx does not inherit credentials or other environment variables. It supplies only `HOME`, `TMPDIR`, `PATH`, `LANG`, and `LC_ALL`. It does not load Bash profiles or accept interactive input.
 
-Bashx uses the current directory as its workspace. Set `BASHX_WORKSPACE` to override it:
+Commands time out after 120 seconds by default and cannot request more than 600 seconds. Timeout kills the command process group. Combined stdout and stderr output is limited to the last 16 KiB.
+
+Bashx uses the current directory as its working directory. Set `BASHX_WORKSPACE` to override it:
 
 ```sh
 AX_TOOLS=bashx ax
 ```
 
-The model calls the tool named `bash`. AX has no built-in fallback.
+The working directory is not a filesystem boundary. Commands can read and change files elsewhere when OS permissions allow it. Run Bashx inside a container or VM when you need isolation.
 
-Bashx supports Linux and macOS through Birdcage. Sandbox behavior depends on platform kernel facilities. It is not a virtual machine and does not defend against kernel vulnerabilities.
+The model calls the tool named `bash`. AX has no built-in fallback.
 
 ## Build
 
