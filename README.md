@@ -1,5 +1,7 @@
 # Bashx
 
+<p align="center"><img src=".github/ax.svg" width="96" height="96" alt="AX ecosystem"></p>
+
 Bashx runs non-interactive Bash commands and implements the Unix tool convention.
 
 ```sh
