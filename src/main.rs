@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
-const DESCRIPTION: &str = r#"{"name":"bash","description":"Execute non-interactive Bash with host filesystem and network access. The environment excludes inherited credentials. Returns stdout and stderr. Commands time out after 120 seconds by default.","parameters":{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run"},"timeout":{"type":"number","minimum":1,"maximum":600,"description":"Timeout in seconds (default 120, maximum 600)"}},"required":["command"],"additionalProperties":false},"snippet":"Execute Bash commands"}"#;
+const DESCRIPTION: &str = r#"{"name":"bash","description":"Execute non-interactive Bash with host filesystem and network access. The environment inherits from the launching shell. Returns stdout and stderr. Commands time out after 120 seconds by default.","parameters":{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run"},"timeout":{"type":"number","minimum":1,"maximum":600,"description":"Timeout in seconds (default 120, maximum 600)"}},"required":["command"],"additionalProperties":false},"snippet":"Execute Bash commands"}"#;
 const MAX_INPUT: u64 = 1024 * 1024;
 const MAX_OUTPUT: usize = 16 * 1024;
 const DEFAULT_TIMEOUT: u64 = 120;
@@ -58,12 +58,6 @@ fn run() -> Result<(), (i32, String)> {
     command
         .args(["--noprofile", "--norc", "-c", &arguments.command])
         .current_dir(&workspace)
-        .env_clear()
-        .env("HOME", &workspace)
-        .env("TMPDIR", &workspace)
-        .env("PATH", "/usr/local/bin:/usr/bin:/bin")
-        .env("LANG", "C.UTF-8")
-        .env("LC_ALL", "C.UTF-8")
         .process_group(0)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
