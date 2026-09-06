@@ -8,12 +8,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@master
+      - uses: actions/setup-go@v5
         with:
-          toolchain: nightly-2026-08-17
-          components: clippy,rustfmt,rust-src
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test
-      - run: cargo build --release
-      - run: test "$(stat -c %s target/release/bashx)" -le 445000
+          go-version: "1.27.0"
+          cache: true
+      - run: test -z "$(gofmt -l .)"
+      - run: go mod tidy -diff
+      - run: go vet ./...
+      - run: go test ./...
+      - run: go test -race ./...
+      - run: go build -trimpath -buildvcs=false -ldflags="-s -w -buildid=" -o bashx .
+      - run: test "$(stat -c %s bashx)" -le 3200000
