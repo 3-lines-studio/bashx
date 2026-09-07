@@ -337,7 +337,7 @@ func TestMainDescribe(t *testing.T) {
 			os.Args = tc.args
 			os.Stdout = w
 			main()
-			w.Close()
+			_ = w.Close()
 			out, _ := io.ReadAll(r)
 			if string(out) != describe+"\n" {
 				t.Errorf("main describe output %d bytes, want %d", len(out), len(describe)+1)
@@ -371,11 +371,11 @@ func invokeRun(t *testing.T, input string) (stdout string, code int, msg string)
 		if _, err := io.WriteString(inW, input); err != nil {
 			t.Logf("write stdin: %v", err)
 		}
-		inW.Close()
+		_ = inW.Close()
 	}()
 
 	code, msg = run()
-	outW.Close()
+	_ = outW.Close()
 	<-writeDone
 	os.Stdin = oldStdin
 	os.Stdout = oldStdout
