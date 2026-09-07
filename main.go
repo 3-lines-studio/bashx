@@ -143,9 +143,19 @@ func pathIsDir(path string) bool {
 	return err == nil && info.IsDir()
 }
 
+func runtimeRoot() string {
+	if d := os.Getenv("BOT_DATA"); d != "" {
+		return d
+	}
+	if r := os.Getenv("BOT_ROOT"); r != "" {
+		return r
+	}
+	return ""
+}
+
 func workspacePath() (string, error) {
 	path := ""
-	if root := os.Getenv("BOT_ROOT"); root != "" {
+	if root := runtimeRoot(); root != "" {
 		if ws := filepath.Join(root, "workspace"); pathIsDir(ws) {
 			path = ws
 		} else {
@@ -182,6 +192,9 @@ func cleanEnv(workspace string) []string {
 	}
 	if root := os.Getenv("BOT_ROOT"); root != "" {
 		env = append(env, "BOT_ROOT="+root)
+	}
+	if data := os.Getenv("BOT_DATA"); data != "" {
+		env = append(env, "BOT_DATA="+data)
 	}
 	return env
 }

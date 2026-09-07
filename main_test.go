@@ -202,6 +202,24 @@ func TestWorkspacePath(t *testing.T) {
 			t.Errorf("workspacePath = %q, want %q", got, want)
 		}
 	})
+	t.Run("bot data root wins over bot root", func(t *testing.T) {
+		root := t.TempDir()
+		data := t.TempDir()
+		ws := filepath.Join(data, "workspace")
+		if err := os.Mkdir(ws, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("BOT_ROOT", root)
+		t.Setenv("BOT_DATA", data)
+		got, err := workspacePath()
+		if err != nil {
+			t.Fatalf("workspacePath: %v", err)
+		}
+		want, _ := filepath.Abs(ws)
+		if got != want {
+			t.Errorf("workspacePath = %q, want %q", got, want)
+		}
+	})
 	t.Run("standalone workspace dir", func(t *testing.T) {
 		t.Setenv("BOT_ROOT", "")
 		dir := t.TempDir()
