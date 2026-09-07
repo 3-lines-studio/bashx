@@ -19,7 +19,7 @@ import (
 const describe = `{"name":"bash","description":"Execute non-interactive Bash with host filesystem and network access. Runs with a minimal clean environment rather than inheriting the launching shell. Returns stdout and stderr. Commands time out after 120 seconds by default.","parameters":{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run"},"timeout":{"type":"number","minimum":1,"maximum":600,"description":"Timeout in seconds (default 120, maximum 600)"}},"required":["command"],"additionalProperties":false},"snippet":"Execute Bash commands"}`
 
 const (
-	maxInput    = 1 << 20 // 1 MiB
+	maxInput    = 1 << 20
 	maxOutput   = 16 * 1024
 	defaultTime = 120
 	maxTimeout  = 600
@@ -49,8 +49,6 @@ func fail(code int, message string) {
 	os.Exit(code)
 }
 
-// run executes one Bash command and prints the combined, tail-capped output.
-// It returns (0, "") on success, otherwise an exit code and a message.
 func run() (int, string) {
 	input, err := io.ReadAll(io.LimitReader(os.Stdin, maxInput+1))
 	if err != nil {
@@ -115,9 +113,6 @@ func run() (int, string) {
 		timedOut = true
 		waitErr = <-waitDone
 	case <-signals:
-		// Ax expects providers to stop cleanly on SIGTERM and pass
-		// termination to their children. Kill the command's process group
-		// so no descendant survives, then exit.
 		killGroup(pgid)
 		waitErr = <-waitDone
 	}
@@ -143,9 +138,6 @@ func run() (int, string) {
 	return 0, ""
 }
 
-// workspacePath resolves the tool's working directory: BOT_ROOT/workspace when
-// present, else BOT_ROOT, else the stand-alone ./workspace-or-cwd fallback.
-// It requires the result to exist, mirroring the previous canonicalization.
 func pathIsDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
@@ -161,7 +153,6 @@ func workspacePath() (string, error) {
 		}
 	}
 	if path == "" {
-		// Stand-alone bashx bets on workspace/ in the current directory.
 		if pathIsDir(filepath.Join(".", "workspace")) {
 			path = filepath.Join(".", "workspace")
 		} else {
@@ -182,9 +173,6 @@ func workspacePath() (string, error) {
 	return absolute, nil
 }
 
-// cleanEnv returns a minimal, credential-free environment so the model cannot
-// read secrets (tokens, keys, connection URLs) that the host exposes to Ax.
-// BOT_ROOT is included when set so skill scripts are reachable by path.
 func cleanEnv(workspace string) []string {
 	env := []string{
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
@@ -198,13 +186,10 @@ func cleanEnv(workspace string) []string {
 	return env
 }
 
-// killGroup sends SIGKILL to the process group led by pgid.
 func killGroup(pgid int) {
 	_ = syscall.Kill(-pgid, syscall.SIGKILL)
 }
 
-// statusString renders a command's exit status like the previous
-// implementation ("exit status: 1", "signal: 9").
 func statusString(waitErr error) string {
 	if waitErr == nil {
 		return ""
@@ -221,7 +206,6 @@ func statusString(waitErr error) string {
 	return waitErr.Error()
 }
 
-// appendLine appends a line of text, adding a separating newline if needed.
 func appendLine(output, line string) string {
 	if output != "" && !strings.HasSuffix(output, "\n") {
 		output += "\n"
@@ -229,7 +213,6 @@ func appendLine(output, line string) string {
 	return output + line
 }
 
-// tail keeps the last maxOutput bytes, rounded to a UTF-8 rune boundary.
 func tail(output string) string {
 	if len(output) <= maxOutput {
 		return output
@@ -241,7 +224,6 @@ func tail(output string) string {
 	return output[start:]
 }
 
-// cappedBuffer keeps only the most recent maxOutput bytes of what is written.
 type cappedBuffer struct {
 	mu  sync.Mutex
 	buf []byte

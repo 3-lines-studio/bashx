@@ -2,10 +2,15 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"unicode/utf8"
 )
 
 func TestDescribeValid(t *testing.T) {
@@ -47,13 +52,11 @@ func TestTailBounded(t *testing.T) {
 		t.Errorf("tail length = %d, want %d", len(got), maxOutput)
 	}
 	if got := tail(strings.Repeat("é", maxOutput/2)); len(got) != maxOutput {
-		// Each é is 2 bytes; a rune boundary round-trips exactly.
 		t.Errorf("tail of multibyte runes length = %d, want %d", len(got), maxOutput)
 	}
 	if got := tail("hello"); got != "hello" {
 		t.Errorf("tail of short output = %q, want %q", got, "hello")
 	}
-	// A cut in the middle of a multibyte rune must not break it.
 	full := strings.Repeat("a", maxOutput-1) + "é" + strings.Repeat("b", 20)
 	got := tail(full)
 	if len(got) > maxOutput {
@@ -93,7 +96,6 @@ func TestStatusString(t *testing.T) {
 	if got := statusString(nil); got != "" {
 		t.Errorf("statusString(nil) = %q, want empty", got)
 	}
-	// A real non-zero exit yields an ExitError; format must match the contract.
 	err := exec.Command("/bin/sh", "-c", "exit 3").Run()
 	if err == nil {
 		t.Fatal("expected an exit error")
@@ -106,12 +108,406 @@ func TestStatusString(t *testing.T) {
 func TestCappedBuffer(t *testing.T) {
 	var b cappedBuffer
 	chunk := strings.Repeat("x", 1024)
-	for i := 0; i < 64; i++ {
+	for range 64 {
 		if _, err := b.Write([]byte(chunk)); err != nil {
 			t.Fatalf("Write: %v", err)
 		}
 	}
 	if got := len(b.String()); got != maxOutput {
 		t.Errorf("cappedBuffer length = %d, want %d", got, maxOutput)
+	}
+}
+
+func TestCappedBufferKeepsNewest(t *testing.T) {
+	var b cappedBuffer
+	if _, err := b.Write([]byte(strings.Repeat("a", maxOutput))); err != nil {
+		t.Fatalf("Write prefix: %v", err)
+	}
+	if _, err := b.Write([]byte("bbbb")); err != nil {
+		t.Fatalf("Write suffix: %v", err)
+	}
+	got := b.String()
+	if len(got) != maxOutput {
+		t.Errorf("length = %d, want %d", len(got), maxOutput)
+	}
+	if !strings.HasPrefix(got, strings.Repeat("a", maxOutput-4)) {
+		t.Error("capped buffer dropped the oldest bytes instead of trimming from the front")
+	}
+	if !strings.HasSuffix(got, "bbbb") {
+		t.Errorf("capped buffer dropped the newest bytes; suffix = %q", got[len(got)-4:])
+	}
+}
+
+func TestAppendLine(t *testing.T) {
+	cases := []struct {
+		name, output, line, want string
+	}{
+		{"empty output", "", "line", "line"},
+		{"no trailing newline", "x", "line", "x\nline"},
+		{"already newline", "x\n", "line", "x\nline"},
+		{"multiple newlines", "x\n\n", "line", "x\n\nline"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := appendLine(tc.output, tc.line); got != tc.want {
+				t.Errorf("appendLine(%q, %q) = %q, want %q", tc.output, tc.line, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestPathIsDir(t *testing.T) {
+	dir := t.TempDir()
+	if !pathIsDir(dir) {
+		t.Errorf("pathIsDir(tempdir) = false, want true")
+	}
+	file := filepath.Join(dir, "f")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if pathIsDir(file) {
+		t.Errorf("pathIsDir(file) = true, want false")
+	}
+	if pathIsDir(filepath.Join(dir, "nope")) {
+		t.Errorf("pathIsDir(nonexistent) = true, want false")
+	}
+}
+
+func TestWorkspacePath(t *testing.T) {
+	t.Run("bot root with workspace subdir", func(t *testing.T) {
+		root := t.TempDir()
+		ws := filepath.Join(root, "workspace")
+		if err := os.Mkdir(ws, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("BOT_ROOT", root)
+		got, err := workspacePath()
+		if err != nil {
+			t.Fatalf("workspacePath: %v", err)
+		}
+		want, _ := filepath.Abs(ws)
+		if got != want {
+			t.Errorf("workspacePath = %q, want %q", got, want)
+		}
+	})
+	t.Run("bot root without workspace subdir", func(t *testing.T) {
+		root := t.TempDir()
+		t.Setenv("BOT_ROOT", root)
+		got, err := workspacePath()
+		if err != nil {
+			t.Fatalf("workspacePath: %v", err)
+		}
+		want, _ := filepath.Abs(root)
+		if got != want {
+			t.Errorf("workspacePath = %q, want %q", got, want)
+		}
+	})
+	t.Run("standalone workspace dir", func(t *testing.T) {
+		t.Setenv("BOT_ROOT", "")
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "workspace"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(dir)
+		got, err := workspacePath()
+		if err != nil {
+			t.Fatalf("workspacePath: %v", err)
+		}
+		want, _ := filepath.Abs(filepath.Join(dir, "workspace"))
+		if got != want {
+			t.Errorf("workspacePath = %q, want %q", got, want)
+		}
+	})
+	t.Run("standalone fallback to cwd", func(t *testing.T) {
+		t.Setenv("BOT_ROOT", "")
+		dir := t.TempDir()
+		t.Chdir(dir)
+		got, err := workspacePath()
+		if err != nil {
+			t.Fatalf("workspacePath: %v", err)
+		}
+		want, _ := filepath.Abs(dir)
+		if got != want {
+			t.Errorf("workspacePath = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestWorkspacePathErrors(t *testing.T) {
+	t.Run("missing bot root", func(t *testing.T) {
+		t.Setenv("BOT_ROOT", filepath.Join(t.TempDir(), "nope"))
+		if _, err := workspacePath(); err == nil {
+			t.Fatal("expected an error for a nonexistent BOT_ROOT")
+		}
+	})
+	t.Run("bot root is a file", func(t *testing.T) {
+		dir := t.TempDir()
+		file := filepath.Join(dir, "f")
+		if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("BOT_ROOT", file)
+		_, err := workspacePath()
+		if err == nil {
+			t.Fatal("expected an error when BOT_ROOT is a file")
+		}
+		if !strings.Contains(err.Error(), "is not a directory") {
+			t.Errorf("err = %q, want to contain %q", err, "is not a directory")
+		}
+	})
+}
+
+func TestCleanEnvValues(t *testing.T) {
+	t.Setenv("BOT_ROOT", "/bot")
+	env := cleanEnv("/home/ws")
+	values := map[string]string{}
+	for _, entry := range env {
+		k, v, _ := strings.Cut(entry, "=")
+		values[k] = v
+	}
+	if values["PATH"] != "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" {
+		t.Errorf("PATH = %q", values["PATH"])
+	}
+	if values["HOME"] != "/home/ws" {
+		t.Errorf("HOME = %q, want the workspace path", values["HOME"])
+	}
+	if values["LANG"] != "C.UTF-8" {
+		t.Errorf("LANG = %q", values["LANG"])
+	}
+	if values["TERM"] != "dumb" {
+		t.Errorf("TERM = %q", values["TERM"])
+	}
+	if values["BOT_ROOT"] != "/bot" {
+		t.Errorf("BOT_ROOT = %q, want /bot", values["BOT_ROOT"])
+	}
+	if len(env) != 5 {
+		t.Errorf("len(cleanEnv) = %d, want 5", len(env))
+	}
+}
+
+func TestCleanEnvNoBotRoot(t *testing.T) {
+	t.Setenv("BOT_ROOT", "")
+	env := cleanEnv("/home/ws")
+	if len(env) != 4 {
+		t.Errorf("len(cleanEnv) = %d, want 4", len(env))
+	}
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "BOT_ROOT=") {
+			t.Errorf("cleanEnv should omit BOT_ROOT when unset, got %q", entry)
+		}
+	}
+}
+
+func TestStatusStringSignal(t *testing.T) {
+	err := exec.Command("/bin/bash", "--noprofile", "--norc", "-c", "kill -9 $$").Run()
+	if err == nil {
+		t.Fatal("expected an error from a self-killed command")
+	}
+	if got := statusString(err); got != "signal: 9" {
+		t.Errorf("statusString = %q, want %q", got, "signal: 9")
+	}
+}
+
+func TestStatusStringPlainError(t *testing.T) {
+	if got := statusString(errors.New("boom")); got != "boom" {
+		t.Errorf("statusString = %q, want %q", got, "boom")
+	}
+}
+
+func TestMainDescribe(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{"plain", []string{"bashx", "describe"}},
+		{"double dash", []string{"bashx", "--", "describe"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			oldArgs := os.Args
+			oldStdout := os.Stdout
+			defer func() {
+				os.Args = oldArgs
+				os.Stdout = oldStdout
+			}()
+			r, w, err := os.Pipe()
+			if err != nil {
+				t.Fatalf("pipe: %v", err)
+			}
+			os.Args = tc.args
+			os.Stdout = w
+			main()
+			w.Close()
+			out, _ := io.ReadAll(r)
+			if string(out) != describe+"\n" {
+				t.Errorf("main describe output %d bytes, want %d", len(out), len(describe)+1)
+			}
+		})
+	}
+}
+
+func invokeRun(t *testing.T, input string) (stdout string, code int, msg string) {
+	t.Helper()
+	oldStdin := os.Stdin
+	oldStdout := os.Stdout
+	inR, inW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdin pipe: %v", err)
+	}
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("create stdout pipe: %v", err)
+	}
+	os.Stdin = inR
+	os.Stdout = outW
+	defer func() {
+		os.Stdin = oldStdin
+		os.Stdout = oldStdout
+	}()
+
+	writeDone := make(chan struct{})
+	go func() {
+		defer close(writeDone)
+		if _, err := io.WriteString(inW, input); err != nil {
+			t.Logf("write stdin: %v", err)
+		}
+		inW.Close()
+	}()
+
+	code, msg = run()
+	outW.Close()
+	<-writeDone
+	os.Stdin = oldStdin
+	os.Stdout = oldStdout
+	out, _ := io.ReadAll(outR)
+	return string(out), code, msg
+}
+
+func TestRunSuccess(t *testing.T) {
+	t.Setenv("BOT_ROOT", t.TempDir())
+	out, code, msg := invokeRun(t, `{"command":"printf hello"}`)
+	if code != 0 {
+		t.Fatalf("code = %d, msg = %q", code, msg)
+	}
+	if msg != "" {
+		t.Errorf("msg = %q, want empty", msg)
+	}
+	if out != "hello" {
+		t.Errorf("stdout = %q, want %q", out, "hello")
+	}
+}
+
+func TestRunExitStatus(t *testing.T) {
+	t.Setenv("BOT_ROOT", t.TempDir())
+	out, code, msg := invokeRun(t, `{"command":"exit 3"}`)
+	if code != 0 {
+		t.Fatalf("code = %d, msg = %q", code, msg)
+	}
+	if !strings.Contains(out, "error: exit status: 3") {
+		t.Errorf("stdout = %q, want to contain %q", out, "error: exit status: 3")
+	}
+}
+
+func TestRunStderrMerged(t *testing.T) {
+	t.Setenv("BOT_ROOT", t.TempDir())
+	out, code, _ := invokeRun(t, `{"command":"printf out; printf err >&2"}`)
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if out != "out\nerr" {
+		t.Errorf("stdout = %q, want %q", out, "out\nerr")
+	}
+}
+
+func TestRunNoOutput(t *testing.T) {
+	t.Setenv("BOT_ROOT", t.TempDir())
+	out, code, _ := invokeRun(t, `{"command":"true"}`)
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if out != "Command completed without output" {
+		t.Errorf("stdout = %q, want %q", out, "Command completed without output")
+	}
+}
+
+func TestRunTimeout(t *testing.T) {
+	t.Setenv("BOT_ROOT", t.TempDir())
+	out, code, _ := invokeRun(t, `{"command":"sleep 30","timeout":1}`)
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if !strings.Contains(out, "command timed out after 1 seconds") {
+		t.Errorf("stdout = %q, want to contain timeout message", out)
+	}
+}
+
+func TestRunLargeMultibyteOutput(t *testing.T) {
+	t.Setenv("BOT_ROOT", t.TempDir())
+	out, code, _ := invokeRun(t, `{"command":"printf '\\303\\251%.0s' {1..10000}"}`)
+	if code != 0 {
+		t.Fatalf("code = %d", code)
+	}
+	if len(out) != maxOutput {
+		t.Errorf("stdout length = %d, want %d", len(out), maxOutput)
+	}
+	if !utf8.ValidString(out) {
+		t.Error("stdout is not valid UTF-8")
+	}
+	if strings.Contains(out, "\uFFFD") {
+		t.Error("tail cut into the middle of a multibyte rune")
+	}
+}
+
+func TestRunWorkspaceError(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "notadir")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("BOT_ROOT", file)
+	_, code, msg := invokeRun(t, `{"command":"echo hi"}`)
+	if code != 1 {
+		t.Errorf("code = %d, want 1", code)
+	}
+	if !strings.Contains(msg, "is not a directory") {
+		t.Errorf("msg = %q, want to contain %q", msg, "is not a directory")
+	}
+}
+
+func TestRunInvalidInput(t *testing.T) {
+	cases := []struct {
+		name     string
+		input    string
+		wantCode int
+		wantMsg  string
+	}{
+		{"not json", `{`, 2, "invalid input:"},
+		{"unknown field", `{"command":"x","extra":1}`, 2, "unknown field"},
+		{"empty command", `{"command":""}`, 2, "command is required"},
+		{"timeout zero", `{"command":"x","timeout":0}`, 2, "timeout must be between 1 and 600"},
+		{"timeout too big", `{"command":"x","timeout":601}`, 2, "timeout must be between 1 and 600"},
+		{"timeout negative", `{"command":"x","timeout":-1}`, 2, "timeout must be between 1 and 600"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, code, msg := invokeRun(t, tc.input)
+			if code != tc.wantCode {
+				t.Errorf("code = %d, want %d", code, tc.wantCode)
+			}
+			if !strings.Contains(msg, tc.wantMsg) {
+				t.Errorf("msg = %q, want to contain %q", msg, tc.wantMsg)
+			}
+		})
+	}
+}
+
+func TestRunOversizedInput(t *testing.T) {
+	input := strings.Repeat("a", maxInput+1)
+	_, code, msg := invokeRun(t, input)
+	if code != 2 {
+		t.Errorf("code = %d, want 2", code)
+	}
+	if !strings.Contains(msg, "input exceeds 1 MiB") {
+		t.Errorf("msg = %q, want to contain %q", msg, "input exceeds 1 MiB")
 	}
 }
