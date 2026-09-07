@@ -16,7 +16,7 @@ import (
 	"unicode/utf8"
 )
 
-const describe = `{"name":"bash","description":"Execute non-interactive Bash with host filesystem and network access. Runs with a minimal clean environment rather than inheriting the launching shell. Returns stdout and stderr. Commands time out after 120 seconds by default.","parameters":{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run"},"timeout":{"type":"number","minimum":1,"maximum":600,"description":"Timeout in seconds (default 120, maximum 600)"}},"required":["command"],"additionalProperties":false},"snippet":"Execute Bash commands"}`
+const describe = `{"name":"bash","description":"Execute non-interactive Bash with host filesystem and network access. Inherits the host environment. Returns stdout and stderr. Commands time out after 120 seconds by default.","parameters":{"type":"object","properties":{"command":{"type":"string","description":"Bash command to run"},"timeout":{"type":"number","minimum":1,"maximum":600,"description":"Timeout in seconds (default 120, maximum 600)"}},"required":["command"],"additionalProperties":false},"snippet":"Execute Bash commands"}`
 
 const (
 	maxInput    = 1 << 20
@@ -83,7 +83,7 @@ func run() (int, string) {
 
 	command := exec.Command("/bin/bash", "--noprofile", "--norc", "-c", arguments.Command)
 	command.Dir = workspace
-	command.Env = cleanEnv(workspace)
+	command.Env = os.Environ()
 	command.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	var stdout, stderr cappedBuffer
 	command.Stdout = &stdout
@@ -181,22 +181,6 @@ func workspacePath() (string, error) {
 		return "", fmt.Errorf("workspace %s is not a directory", absolute)
 	}
 	return absolute, nil
-}
-
-func cleanEnv(workspace string) []string {
-	env := []string{
-		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-		"HOME=" + workspace,
-		"LANG=C.UTF-8",
-		"TERM=dumb",
-	}
-	if root := os.Getenv("BOT_ROOT"); root != "" {
-		env = append(env, "BOT_ROOT="+root)
-	}
-	if data := os.Getenv("BOT_DATA"); data != "" {
-		env = append(env, "BOT_DATA="+data)
-	}
-	return env
 }
 
 func killGroup(pgid int) {

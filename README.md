@@ -7,7 +7,7 @@ bashx describe
 printf '%s\n' '{"command":"printf hello"}' | bashx run bash
 ```
 
-Commands run with host filesystem and network access. bashx runs them in a minimal clean environment (`PATH`, `HOME`, `LANG`, `TERM`) rather than inheriting the launching shell, so credentials exposed to `ax` are not visible to the model. It does not load Bash profiles or accept interactive input.
+Commands run with host filesystem and network access and inherit the host environment (the container or VM is the sandbox). They do not load Bash profiles or accept interactive input.
 
 Commands time out after 120 seconds by default (max 600 seconds); the timeout kills the command process group. Combined stdout/stderr is capped at the last 16 KiB.
 

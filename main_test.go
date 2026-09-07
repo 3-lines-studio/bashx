@@ -7,7 +7,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -64,31 +63,6 @@ func TestTailBounded(t *testing.T) {
 	}
 	if strings.Contains(got, "\uFFFD") {
 		t.Errorf("tail broke a multibyte rune: %q", got)
-	}
-}
-
-func TestCleanEnvMinimalAndSecretFree(t *testing.T) {
-	t.Setenv("SLACK_BOT_TOKEN", "xoxb-secret")
-	t.Setenv("DEEPSEEK_API_KEY", "sk-secret")
-	t.Setenv("DATABASE_URL", "postgres://secret")
-	t.Setenv("BOT_ROOT", "/bot")
-
-	env := cleanEnv("/tmp/ws")
-	keys := make([]string, 0, len(env))
-	for _, entry := range env {
-		key, _, _ := strings.Cut(entry, "=")
-		keys = append(keys, key)
-	}
-	want := []string{"PATH", "HOME", "LANG", "TERM", "BOT_ROOT"}
-	slices.Sort(keys)
-	slices.Sort(want)
-	if !slices.Equal(keys, want) {
-		t.Errorf("cleanEnv keys = %v, want %v", keys, want)
-	}
-	for _, entry := range env {
-		if strings.Contains(entry, "secret") {
-			t.Errorf("cleanEnv leaked a secret: %q", entry)
-		}
 	}
 }
 
@@ -273,47 +247,6 @@ func TestWorkspacePathErrors(t *testing.T) {
 			t.Errorf("err = %q, want to contain %q", err, "is not a directory")
 		}
 	})
-}
-
-func TestCleanEnvValues(t *testing.T) {
-	t.Setenv("BOT_ROOT", "/bot")
-	env := cleanEnv("/home/ws")
-	values := map[string]string{}
-	for _, entry := range env {
-		k, v, _ := strings.Cut(entry, "=")
-		values[k] = v
-	}
-	if values["PATH"] != "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" {
-		t.Errorf("PATH = %q", values["PATH"])
-	}
-	if values["HOME"] != "/home/ws" {
-		t.Errorf("HOME = %q, want the workspace path", values["HOME"])
-	}
-	if values["LANG"] != "C.UTF-8" {
-		t.Errorf("LANG = %q", values["LANG"])
-	}
-	if values["TERM"] != "dumb" {
-		t.Errorf("TERM = %q", values["TERM"])
-	}
-	if values["BOT_ROOT"] != "/bot" {
-		t.Errorf("BOT_ROOT = %q, want /bot", values["BOT_ROOT"])
-	}
-	if len(env) != 5 {
-		t.Errorf("len(cleanEnv) = %d, want 5", len(env))
-	}
-}
-
-func TestCleanEnvNoBotRoot(t *testing.T) {
-	t.Setenv("BOT_ROOT", "")
-	env := cleanEnv("/home/ws")
-	if len(env) != 4 {
-		t.Errorf("len(cleanEnv) = %d, want 4", len(env))
-	}
-	for _, entry := range env {
-		if strings.HasPrefix(entry, "BOT_ROOT=") {
-			t.Errorf("cleanEnv should omit BOT_ROOT when unset, got %q", entry)
-		}
-	}
 }
 
 func TestStatusStringSignal(t *testing.T) {
