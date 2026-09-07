@@ -68,6 +68,7 @@ func TestCleanEnvMinimalAndSecretFree(t *testing.T) {
 	t.Setenv("SLACK_BOT_TOKEN", "xoxb-secret")
 	t.Setenv("DEEPSEEK_API_KEY", "sk-secret")
 	t.Setenv("DATABASE_URL", "postgres://secret")
+	t.Setenv("BOT_ROOT", "/bot")
 
 	env := cleanEnv("/tmp/ws")
 	keys := make([]string, 0, len(env))
@@ -75,7 +76,7 @@ func TestCleanEnvMinimalAndSecretFree(t *testing.T) {
 		key, _, _ := strings.Cut(entry, "=")
 		keys = append(keys, key)
 	}
-	want := []string{"PATH", "HOME", "LANG", "TERM"}
+	want := []string{"PATH", "HOME", "LANG", "TERM", "BOT_ROOT"}
 	slices.Sort(keys)
 	slices.Sort(want)
 	if !slices.Equal(keys, want) {

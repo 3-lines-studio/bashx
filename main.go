@@ -143,12 +143,30 @@ func run() (int, string) {
 	return 0, ""
 }
 
-// workspacePath resolves BASHX_WORKSPACE (default ".") to an absolute path
-// and requires it to exist, mirroring the previous canonicalize behavior.
+// workspacePath resolves the tool's working directory: BOT_ROOT/workspace when
+// present, else BOT_ROOT, else the stand-alone ./workspace-or-cwd fallback.
+// It requires the result to exist, mirroring the previous canonicalization.
+func pathIsDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
+}
+
 func workspacePath() (string, error) {
-	path := os.Getenv("BASHX_WORKSPACE")
+	path := ""
+	if root := os.Getenv("BOT_ROOT"); root != "" {
+		if ws := filepath.Join(root, "workspace"); pathIsDir(ws) {
+			path = ws
+		} else {
+			path = root
+		}
+	}
 	if path == "" {
-		path = "."
+		// Stand-alone bashx bets on workspace/ in the current directory.
+		if pathIsDir(filepath.Join(".", "workspace")) {
+			path = filepath.Join(".", "workspace")
+		} else {
+			path = "."
+		}
 	}
 	absolute, err := filepath.Abs(path)
 	if err != nil {
@@ -166,13 +184,18 @@ func workspacePath() (string, error) {
 
 // cleanEnv returns a minimal, credential-free environment so the model cannot
 // read secrets (tokens, keys, connection URLs) that the host exposes to Ax.
+// BOT_ROOT is included when set so skill scripts are reachable by path.
 func cleanEnv(workspace string) []string {
-	return []string{
+	env := []string{
 		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
 		"HOME=" + workspace,
 		"LANG=C.UTF-8",
 		"TERM=dumb",
 	}
+	if root := os.Getenv("BOT_ROOT"); root != "" {
+		env = append(env, "BOT_ROOT="+root)
+	}
+	return env
 }
 
 // killGroup sends SIGKILL to the process group led by pgid.

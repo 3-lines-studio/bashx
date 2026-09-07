@@ -13,7 +13,7 @@ Commands run with host filesystem and network access. Bashx runs the command in 
 
 Commands time out after 120 seconds by default and cannot request more than 600 seconds. Timeout kills the command process group. Combined stdout and stderr output is limited to the last 16 KiB.
 
-Bashx uses the current directory as its working directory. Set `BASHX_WORKSPACE` to override it:
+Bashx uses `$BOT_ROOT/workspace` when run inside a bot, falling back to `$BOT_ROOT`, then to the current directory (or a `workspace/` directory present there) when run standalone:
 
 ```sh
 AX_TOOLS=bashx ax
